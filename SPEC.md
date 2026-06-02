@@ -905,16 +905,37 @@ animation, state management ready for multiple Satellites.
 
 | Phase | Scope |
 |---|---|
-| 1 | Canvas grid, Build mode, orange cursor, RefCell, basic K. Ready to implement. |
-| 2 | Testbed, unified validation counter, Bingo highlight, Save (Build). Ready to implement. |
-| 3a | Satellite mode — S toggle, Handle, single Satellite, Include, stamping workflow. Specified. |
-| 3b | Multiple Satellites, + spawning, Tab/Return cycling, 2-4 Hz animation, Edit, Flip (S mode), Satellite Save. Specified. |
-| 4 | Pattern Library panel, .ptn file I/O, dual-variant load preview, file watching, in-panel pattern delete. Follows Phase 3b. |
-| 5 | History panel, full K behavior, H mode navigation. Follows Phase 4. |
-| 6 | G mode, Grid Background panel, all background elements, daisy with shift/Flip. Follows Phase 5. |
-| 7 | Clipboard (Ctrl-C/V/X), legal pattern detection, K gating, hint system. Follows Phase 6. K gating is a Phase 7 feature — Phases 1–6 have no K gating. |
-| 8 | Comb row display and Pord computation. [DEFERRED] |
-| 9 | Comb interaction, Pord input, searchlight, Composer integration. [SPECULATIVE] |
+| 1 | Canvas grid, Build mode, orange cursor, RefCell, basic K. Ready to 
+| implement. | 
+
+2 | Testbed, unified validation counter, Bingo highlight, Save 
+| (Build). Ready to implement. | 
+
+3a | Satellite mode — S toggle, Handle, 
+| single Satellite, Include, stamping workflow. Specified. | 
+
+3b | Multiple 
+| Satellites, + spawning, Tab/Return cycling, 2-4 Hz animation, Edit, Flip (S 
+| mode), Satellite Save. Specified. | 
+
+4 | Pattern Library panel, .ptn file | I/O, dual-variant load preview, 
+   file watching, in-panel pattern delete. | Follows Phase 3b. | 
+
+5 | History panel, full K behavior, H mode navigation. 
+| Follows Phase 4. | 
+
+6 | G mode, Grid Background panel, all background 
+| elements, daisy with shift/Flip. Follows Phase 5. | 
+
+7 | Clipboard 
+| (Ctrl-C/V/X), legal pattern detection, K gating, hint system. Follows Phase 
+| 6. K gating is a Phase 7 feature — Phases 1–6 have no K gating. | 
+
+8 | Comb 
+| row display and Pord computation. [DEFERRED] | 
+
+9 | Comb interaction, Pord 
+| input, searchlight, Composer integration. [SPECULATIVE] |
 
 **[SETTLED]** Explicitly excluded from Phases 1-2:
   Satellite spawning, Pattern Library loading, History/H mode,
