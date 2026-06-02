@@ -63,7 +63,9 @@ class GridWidget(Widget):
         return Strip(segments)
 
     def _cell_colors(self, row: int, col: int) -> tuple:
-        is_cursor  = (row == self._state.cursor_row and col == self._state.cursor_col)
+        is_cursor  = (self._state.mode != Mode.HISTORY
+                      and row == self._state.cursor_row
+                      and col == self._state.cursor_col)
         is_refcell = (row == 0 and col == 0)
         is_build   = (row, col) in self._cells.build_cells
 
