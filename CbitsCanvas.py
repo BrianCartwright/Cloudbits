@@ -17,10 +17,10 @@ from rich.color import Color
 from cloudbits.app_state import AppState, Mode
 from cloudbits.mode_manager import ModeManager
 from cloudbits.cell_set_manager import CellSetManager
-from cloudbits.cursor_controller import CursorController
+from cloudbits.cursor_controller import CursorController, GRID_MAX
 from cloudbits.history_manager import HistoryManager, Snapshot
 from cloudbits.validation_engine import ValidationEngine
-from cloudbits.file_manager import FileManager
+from cloudbits.file_manager import FileManager, SessionFolder
 
 # ── colour palette (xterm-256) ────────────────────────────────────────────────
 C_ORANGE     = Color.from_ansi(208)   # Build cursor
@@ -160,6 +160,10 @@ class CloudbitsApp(App):
         self._pre_history_cells: set = set()
         self._pre_history_cursor: tuple = (0, 0)
         self._restore_pending: bool = False
+        self._session: object = None       # SessionFolder, created on first K
+        self._last_tsv_name: str = ""
+        self._tag_eligible: bool = False   # True briefly after K, allows T
+        self._tagging: bool = False        # True while KT tag input is open
 
     # ── layout ───────────────────────────────────────────────────────────────
 
@@ -264,12 +268,15 @@ class CloudbitsApp(App):
     def on_key(self, event) -> None:
         key = event.key
 
-        # while save prompt is open, only Escape is handled here;
-        # all other input goes to the Input widget
         if self._save_pending:
             if key == "escape":
                 self._cancel_save()
             return
+
+        if self._tagging:
+            if key == "escape":
+                self._cancel_tag()
+            return  # all other input goes to the Input widget
 
         # H mode: slideshow navigation only — all other keys are blocked
         if self._state.mode == Mode.HISTORY:
@@ -288,6 +295,14 @@ class CloudbitsApp(App):
             elif key in ("return", "enter", "ctrl+m"):
                 self._begin_restore()
             return
+
+        # KT: if K was just pressed and T follows, begin tagging
+        if self._tag_eligible:
+            self._tag_eligible = False
+            if key == "t":
+                self._begin_tag()
+                return
+            # any other key: fall through and process normally
 
         if key == "up":
             self._cursor.move(1, 0)
@@ -319,13 +334,18 @@ class CloudbitsApp(App):
         self.query_one(GridWidget).refresh()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if not self._save_pending:
-            return
-        filename = event.value.strip()
-        if filename:
-            self._do_save(filename)
-        else:
-            self._cancel_save()
+        if self._save_pending:
+            filename = event.value.strip()
+            if filename:
+                self._do_save(filename)
+            else:
+                self._cancel_save()
+        elif self._tagging:
+            text = event.value.strip()
+            if text:
+                self._confirm_tag(text)
+            else:
+                self._cancel_tag()
 
     # ── save flow ─────────────────────────────────────────────────────────────
 
@@ -375,9 +395,40 @@ class CloudbitsApp(App):
         save_input_w.value = ""
         self._restore_status()
 
+    # ── KT tag flow ───────────────────────────────────────────────────────────
+
+    def _begin_tag(self) -> None:
+        self._tagging = True
+        inp = self.query_one("#save-input", Input)
+        inp.value = ""
+        inp.disabled = False
+        self.query_one("#save-input").display = True
+        self.query_one("#save-input").focus()
+        self._set_status(
+            f"Tag for {self._last_tsv_name}  ·  Enter to save   Esc to cancel:"
+        )
+
+    def _confirm_tag(self, text: str) -> None:
+        self._session.write_tag(self._last_tsv_name, text)
+        self._tagging = False
+        inp = self.query_one("#save-input", Input)
+        inp.disabled = True
+        inp.value = ""
+        self.query_one("#save-input").display = False
+        txt_name = self._last_tsv_name[:-4] + ".txt"
+        self._set_status(f"Tagged: {txt_name}")
+
+    def _cancel_tag(self) -> None:
+        self._tagging = False
+        inp = self.query_one("#save-input", Input)
+        inp.disabled = True
+        inp.value = ""
+        self.query_one("#save-input").display = False
+        self._restore_status()
+
     def _restore_status(self) -> None:
         self._set_status(
-            "BUILD  ·  ARROWS move   SPACE toggle   K keep   V save"
+            "BUILD  ·  ARROWS move   SPACE toggle   K to Keep  KT to Keep and Tag"
         )
 
     def _set_status(self, msg: str) -> None:
@@ -397,7 +448,14 @@ class CloudbitsApp(App):
         count = self._history.keep(snapshot)
         self._state.k_count = count
         self.query_one("#k-count", Static).update(f"K snapshots: {count}")
-        self._set_status(f"BUILD  ·  Kept state {count}")
+        if self._session is None:
+            self._session = SessionFolder()
+        coeff = self._validation.coeff_sum(self._cells.build_cells)
+        self._last_tsv_name = self._session.write_tsv(
+            GRID_MAX, self._cells.build_cells, coeff
+        )
+        self._tag_eligible = True
+        self._set_status(f"Kept: {self._last_tsv_name}  ·  T to tag")
 
     # ── H mode (history slideshow) ────────────────────────────────────────────
 

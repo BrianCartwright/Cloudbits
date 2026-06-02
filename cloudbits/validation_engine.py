@@ -17,6 +17,15 @@ class ValidationEngine:
     def __init__(self) -> None:
         self._coeff_grid = make_coeff_grid(half=15)
 
+    def coeff_sum(self, cell_coords) -> tuple:
+        """Return the raw CoeffTuple sum as (ca, cb, cc, cd)."""
+        total = CoeffTuple((0, 0, 0, 0))
+        for r, c in cell_coords:
+            ct = self._coeff_grid.get((r, c))
+            if ct is not None:
+                total = total + ct
+        return tuple(total.v)
+
     def validate(self, cell_coords) -> tuple:
         """
         Returns (k: int, bingo: bool).
