@@ -159,6 +159,7 @@ class CloudbitsApp(App):
         self._history_index: int = 0
         self._pre_history_cells: set = set()
         self._pre_history_cursor: tuple = (0, 0)
+        self._restore_pending: bool = False
 
     # ── layout ───────────────────────────────────────────────────────────────
 
@@ -272,12 +273,20 @@ class CloudbitsApp(App):
 
         # H mode: slideshow navigation only — all other keys are blocked
         if self._state.mode == Mode.HISTORY:
-            if key == "h":
+            if self._restore_pending:
+                if key in ("return", "enter", "ctrl+m"):
+                    self._confirm_restore()
+                else:
+                    self._restore_pending = False
+                    self._load_snapshot(self._history_index)
+            elif key == "h":
                 self._exit_history()
             elif key == "left":
                 self._history_step(-1)
             elif key == "right":
                 self._history_step(1)
+            elif key in ("return", "enter", "ctrl+m"):
+                self._begin_restore()
             return
 
         if key == "up":
@@ -400,6 +409,7 @@ class CloudbitsApp(App):
         self._load_snapshot(self._history_index)
 
     def _exit_history(self) -> None:
+        self._restore_pending = False
         self._mode_mgr.exit_history()
         self._cells.build_cells = self._pre_history_cells
         self._state.cursor_row, self._state.cursor_col = self._pre_history_cursor
@@ -413,6 +423,35 @@ class CloudbitsApp(App):
         if 0 <= new_index < self._history.count:
             self._history_index = new_index
             self._load_snapshot(self._history_index)
+
+    def _begin_restore(self) -> None:
+        self._restore_pending = True
+        n = self._history_index + 1
+        discard = self._history.count - n
+        if discard > 0:
+            tail = f"subsequent state{'s' if discard != 1 else ''}"
+            msg = (f"HISTORY  ·  Restore snapshot {n} and discard "
+                   f"{discard} {tail}?  Return to confirm   H to cancel")
+        else:
+            msg = (f"HISTORY  ·  Restore snapshot {n} as current build "
+                   f"state?  Return to confirm   H to cancel")
+        self._set_status(msg)
+
+    def _confirm_restore(self) -> None:
+        snap = self._history.snapshots[self._history_index]
+        self._history.truncate_after(self._history_index)
+        self._restore_pending = False
+        self._mode_mgr.exit_history()
+        self._cells.build_cells = set(snap.build_cells)
+        self._state.cursor_row = 0
+        self._state.cursor_col = 0
+        count = self._history.count
+        self._state.k_count = count
+        self.query_one("#k-count", Static).update(f"K snapshots: {count}")
+        self._sync_rowcol()
+        self._sync_validation()
+        self.query_one(GridWidget).refresh()
+        self._restore_status()
 
     def _load_snapshot(self, index: int) -> None:
         snap = self._history.snapshots[index]

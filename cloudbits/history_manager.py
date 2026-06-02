@@ -30,6 +30,10 @@ class HistoryManager:
     def count(self) -> int:
         return len(self._snapshots)
 
+    def truncate_after(self, index: int) -> None:
+        """Discard all snapshots after index, keeping index itself."""
+        self._snapshots = self._snapshots[:index + 1]
+
     @property
     def snapshots(self) -> list:
         return list(self._snapshots)
