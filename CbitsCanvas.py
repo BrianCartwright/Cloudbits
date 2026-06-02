@@ -28,15 +28,12 @@ C_DARK_GREEN = Color.from_ansi(28)    # Build cells + B-mode margin
 C_GRAY_BLUE  = Color.from_ansi(67)    # RefCell
 C_BLACK      = Color.from_ansi(0)     # Grid background
 
-GRID_MIN = -15
-GRID_MAX = 15
-
 
 # ── Grid widget ───────────────────────────────────────────────────────────────
 
 class GridWidget(Widget):
     """
-    31x31 chexel canvas.  Each grid cell maps to two terminal chars (▀▄)
+    31×31 chexel canvas.  Each grid cell maps to two terminal chars (▀▄)
     forming a 2x2 virtual checkerboard pixel with two independent colours.
     """
 
@@ -58,7 +55,7 @@ class GridWidget(Widget):
             return Strip([])
         grid_row = 15 - y
         segments: list = []
-        for grid_col in range(GRID_MAX, GRID_MIN - 1, -1):
+        for grid_col in range(15, -16, -1):
             primary, secondary = self._cell_colors(grid_row, grid_col)
             style = Style(color=primary, bgcolor=secondary)
             segments.append(Segment("▀", style))
@@ -96,41 +93,30 @@ class CloudbitsApp(App):
 
     #main-container {
         width: 136;
-        height: 44;
+        height: 40;
         layout: vertical;
         background: black;
     }
 
-    /* title */
+    /* title + command bar */
     #title-area  { height: 3; }
-    .title-blank { height: 1; }
+    #title-blank { height: 1; }
     #title-row   { height: 1; content-align: center middle; text-align: center; }
 
-    /* header */
-    #header-controls { height: 4; layout: horizontal; }
-    #left-header     { width: 35; layout: horizontal; }
-    #center-header   { width: 66; layout: horizontal; }
-    #right-header    { width: 35; layout: horizontal; }
+    /* command bar (row 3) */
+    #cmd-bar    { height: 1; layout: horizontal; }
+    #cmd-left   { width: 35; content-align: center middle; }
+    #cmd-center { width: 66; layout: horizontal; }
+    #cmd-right  { width: 35; layout: horizontal; }
 
-    /* header control box widths */
-    .hb-grid    { width: 9; }
-    .hb-save    { width: 7; }
-    .hb-rowcol  { width: 13; }
-    .hb-build   { width: 9; }
-    .hb-sat     { width: 12; }
-    .hb-plus    { width: 5; }
-    .hb-flip    { width: 6; }
-    .hb-edit    { width: 6; }
-    .hb-include { width: 9; }
-    .hb-keep    { width: 8; }
-    .hb-hist    { width: 11; }
-
-    /* spacers */
-    .sp-1  { width: 1; }
-    .sp-2  { width: 2; }
-    .sp-3  { width: 3; }
-    .sp-11 { width: 11; }
-    .sp-17 { width: 17; }
+    /* width utilities (command bar items and spacers) */
+    .w1   { width: 1;   }
+    .w4   { width: 4;   }
+    .w5   { width: 5;   }
+    .w6   { width: 6;   }
+    .w7   { width: 7;   }
+    .w9   { width: 9;   }
+    .w13  { width: 13;  }
 
     /* main content */
     #main-content  { height: 33; layout: horizontal; }
@@ -146,6 +132,9 @@ class CloudbitsApp(App):
     #top-margin        { height: 1; background: #008700; }
     #bottom-margin     { height: 1; background: #008700; }
     #grid-container    { height: 31; background: black; }
+
+    /* right panel: row/col counter aligned to grid row 0 */
+    #rowcol-spacer { height: 9; }
 
     /* footer */
     #footer      { height: 4; layout: vertical; }
@@ -165,6 +154,9 @@ class CloudbitsApp(App):
         self._validation = ValidationEngine()
         self._files      = FileManager()
         self._save_pending = False
+        self._history_index: int = 0
+        self._pre_history_cells: set = set()
+        self._pre_history_cursor: tuple = (0, 0)
 
     # ── layout ───────────────────────────────────────────────────────────────
 
@@ -172,43 +164,40 @@ class CloudbitsApp(App):
         with Container(id="main-container"):
 
             with Container(id="title-area"):
-                yield Static("", classes="title-blank")
                 yield Static(
                     "c    l    o    u    d    b    i    t    s",
                     id="title-row",
                 )
-                yield Static("", classes="title-blank")
+                yield Static("", id="title-blank")
+                with Horizontal(id="cmd-bar"):
+                    # Left (35): saVe only, centered above Pattern Library
+                    yield Static("sa[cyan]V[/]e", id="cmd-left")
 
-            with Horizontal(id="header-controls"):
-                with Horizontal(id="left-header"):
-                    yield Static(self._box("GRID",  "G", 9), classes="hb-grid",  id="ctrl-grid")
-                    yield Container(classes="sp-2")
-                    yield Static(self._box("saVe",  "V", 7), classes="hb-save",  id="ctrl-save")
-                    yield Container(classes="sp-17")
+                    # Center (66): commands evenly spaced above grid
+                    with Horizontal(id="cmd-center"):
+                        yield Static("[cyan]B[/]uild",    classes="w5")
+                        yield Container(classes="w4")
+                        yield Static("[cyan]S[/]atellite", classes="w9")
+                        yield Container(classes="w4")
+                        yield Static("[cyan]F[/]lip",      classes="w4")
+                        yield Container(classes="w4")
+                        yield Static("·",                  classes="w1")
+                        yield Container(classes="w4")
+                        yield Static("·",                  classes="w1")
+                        yield Container(classes="w4")
+                        yield Static("[cyan]  +  [/]",     classes="w5")
+                        yield Container(classes="w5")
+                        yield Static("[cyan]E[/]dit",      classes="w4")
+                        yield Container(classes="w5")
+                        yield Static("[cyan]I[/]nclude",   classes="w7")
 
-                with Horizontal(id="center-header"):
-                    yield Static(
-                        self._box("Row  Col\n  0    0", "", 13),
-                        classes="hb-rowcol", id="ctrl-rowcol",
-                    )
-                    yield Container(classes="sp-2")
-                    yield Static(self._box("Build",     "B",  9), classes="hb-build",   id="ctrl-build")
-                    yield Container(classes="sp-1")
-                    yield Static(self._box("Satellite", "S", 12), classes="hb-sat",     id="ctrl-sat")
-                    yield Container(classes="sp-1")
-                    yield Static(self._box("+",         "+",  5), classes="hb-plus",    id="ctrl-plus")
-                    yield Static(self._box("Flip",      "F",  6), classes="hb-flip",    id="ctrl-flip")
-                    yield Container(classes="sp-1")
-                    yield Static(self._box("Edit",      "E",  6), classes="hb-edit",    id="ctrl-edit")
-                    yield Container(classes="sp-1")
-                    yield Static(self._box("Include",   "I",  9), classes="hb-include", id="ctrl-include")
-
-                with Horizontal(id="right-header"):
-                    yield Container(classes="sp-3")
-                    yield Static(self._box("Keep",    "K",  8), classes="hb-keep", id="ctrl-keep")
-                    yield Container(classes="sp-2")
-                    yield Static(self._box("History", "H", 11), classes="hb-hist", id="ctrl-hist")
-                    yield Container(classes="sp-11")
+                    # Right (35): Keep History, positions match old box centres
+                    with Horizontal(id="cmd-right"):
+                        yield Container(classes="w5")
+                        yield Static("[cyan]K[/]eep",    classes="w4")
+                        yield Container(classes="w6")
+                        yield Static("[cyan]H[/]istory", classes="w7")
+                        yield Container(classes="w13")
 
             with Horizontal(id="main-content"):
 
@@ -228,13 +217,18 @@ class CloudbitsApp(App):
                             yield Container(id="bottom-margin")
                         yield Container(id="right-grid-margin")
 
-                # right panel: History, Validation, Notes
+                # right panel: History, Validation, Notes, Row/Col counter
                 with Vertical(id="right-panel"):
                     yield Static(self._panel_header("HISTORY"))
                     yield Static("K snapshots: 0", id="k-count")
                     yield Static(self._panel_header("VALIDATION"))
                     yield Static("—", id="val-counter")
                     yield Static(self._panel_header("NOTES / TAGS"))
+                    yield Container(id="rowcol-spacer")
+                    yield Static(
+                        self._box("Row  Col\n  0    0", "", 13),
+                        id="ctrl-rowcol",
+                    )
 
             with Vertical(id="footer"):
                 yield Static("── COMB ──", id="comb-area")
@@ -253,10 +247,10 @@ class CloudbitsApp(App):
 
     def on_mount(self) -> None:
         size = self.console.size
-        if size.width < 136 or size.height < 44:
+        if size.width < 136 or size.height < 40:
             self.exit(
                 message=(
-                    f"Cloudbits requires a 136×44 terminal.\n"
+                    f"Cloudbits requires a 136×40 terminal.\n"
                     f"Current: {size.width}×{size.height}\n"
                     f"Use fullscreen (F11) or reduce font size (Ctrl -)."
                 )
@@ -272,6 +266,16 @@ class CloudbitsApp(App):
         if self._save_pending:
             if key == "escape":
                 self._cancel_save()
+            return
+
+        # H mode: slideshow navigation only — all other keys are blocked
+        if self._state.mode == Mode.HISTORY:
+            if key == "h":
+                self._exit_history()
+            elif key == "left":
+                self._history_step(-1)
+            elif key == "right":
+                self._history_step(1)
             return
 
         if key == "up":
@@ -291,6 +295,10 @@ class CloudbitsApp(App):
             return
         elif key == "v":
             self._begin_save()
+            return
+        elif key == "h":
+            if self._history.count > 0:
+                self._enter_history()
             return
         else:
             return
@@ -339,7 +347,6 @@ class CloudbitsApp(App):
                 pattern_type="build",
                 is_integer=self._state.bingo,
                 multiplier=self._state.validation_ratio,
-                testbed_seed=self._validation._seed,
                 source_history_state=self._state.k_count,
             )
             saved_name = os.path.basename(path)
@@ -380,6 +387,43 @@ class CloudbitsApp(App):
         self._state.k_count = count
         self.query_one("#k-count", Static).update(f"K snapshots: {count}")
         self._set_status(f"BUILD  ·  Kept state {count}")
+
+    # ── H mode (history slideshow) ────────────────────────────────────────────
+
+    def _enter_history(self) -> None:
+        self._pre_history_cells = set(self._cells.build_cells)
+        self._pre_history_cursor = self._cursor.position
+        self._history_index = self._history.count - 1
+        self._mode_mgr.enter_history()
+        self._load_snapshot(self._history_index)
+
+    def _exit_history(self) -> None:
+        self._mode_mgr.exit_history()
+        self._cells.build_cells = self._pre_history_cells
+        self._state.cursor_row, self._state.cursor_col = self._pre_history_cursor
+        self._sync_rowcol()
+        self._sync_validation()
+        self.query_one(GridWidget).refresh()
+        self._restore_status()
+
+    def _history_step(self, delta: int) -> None:
+        new_index = self._history_index + delta
+        if 0 <= new_index < self._history.count:
+            self._history_index = new_index
+            self._load_snapshot(self._history_index)
+
+    def _load_snapshot(self, index: int) -> None:
+        snap = self._history.snapshots[index]
+        self._cells.build_cells = set(snap.build_cells)
+        self._state.cursor_row = snap.cursor_row
+        self._state.cursor_col = snap.cursor_col
+        n, total = index + 1, self._history.count
+        self._set_status(
+            f"HISTORY  ·  {n} of {total}  ·  ← → browse   H to exit"
+        )
+        self._sync_rowcol()
+        self._sync_validation()
+        self.query_one(GridWidget).refresh()
 
     # ── UI sync ───────────────────────────────────────────────────────────────
 

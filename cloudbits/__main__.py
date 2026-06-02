@@ -1,0 +1,2 @@
+import CbitsCanvas
+CbitsCanvas.main()
