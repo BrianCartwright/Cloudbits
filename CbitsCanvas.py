@@ -16,17 +16,31 @@ from rich.color import Color
 
 from cloudbits.app_state import AppState, Mode
 from cloudbits.mode_manager import ModeManager
-from cloudbits.cell_set_manager import CellSetManager
-from cloudbits.cursor_controller import CursorController, GRID_MAX
+from cloudbits.cell_set_manager import CellSetManager, SatelliteSet
+from cloudbits.cursor_controller import CursorController, GRID_MIN, GRID_MAX
 from cloudbits.history_manager import HistoryManager, Snapshot
 from cloudbits.validation_engine import ValidationEngine
 from cloudbits.file_manager import FileManager, SessionFolder
 
 # ── colour palette (xterm-256) ────────────────────────────────────────────────
-C_ORANGE     = Color.from_ansi(208)   # Build cursor
-C_DARK_GREEN = Color.from_ansi(28)    # Build cells + B-mode margin
-C_GRAY_BLUE  = Color.from_ansi(67)    # RefCell
-C_BLACK      = Color.from_ansi(0)     # Grid background
+C_ORANGE      = Color.from_ansi(208)   # Build cursor
+C_DARK_GREEN  = Color.from_ansi(28)   # Build cells + B-mode margin
+C_GRAY_BLUE   = Color.from_ansi(67)   # Handle / RefCell
+C_BLACK       = Color.from_ansi(0)    # Grid background
+C_DRAW        = Color.from_ansi(110)  # #87afd7  Draw cursor
+C_SAT         = Color.from_ansi(32)   # Satellite cells
+C_BRIGHT_GREEN = Color.from_ansi(40)  # Handle-selected; S+B overlap
+
+# ── S mode command bar text ────────────────────────────────────────────────────
+_CMD_BUILD = (
+    "[cyan]B[/]uild    [cyan]S[/]atellite    [cyan]F[/]lip  ·  ·"
+    "  [cyan]  +  [/]    [cyan]E[/]dit   [cyan]I[/]nclude"
+)
+_CMD_SAT       = "[cyan]D[/]raw   [cyan]M[/]ove   [cyan]  +  [/]   [cyan]I[/]nclude"
+_CMD_SAT_FLASH = "[cyan]D[/]raw   [cyan]M[/]ove   [cyan]  +  [/]   [bold white]I[/]nclude"
+
+# Arrow key → (Δrow, Δcol) matching existing cursor convention
+_SAT_DIRS = {"up": (1, 0), "down": (-1, 0), "left": (0, 1), "right": (0, -1)}
 
 
 # ── Grid widget ───────────────────────────────────────────────────────────────
@@ -63,19 +77,55 @@ class GridWidget(Widget):
         return Strip(segments)
 
     def _cell_colors(self, row: int, col: int) -> tuple:
-        is_cursor  = (self._state.mode != Mode.HISTORY
-                      and row == self._state.cursor_row
-                      and col == self._state.cursor_col)
         is_refcell = (row == 0 and col == 0)
         is_build   = (row, col) in self._cells.build_cells
 
+        if self._state.mode == Mode.SATELLITE:
+            is_handle = (row == self._state.handle_row
+                         and col == self._state.handle_col)
+            is_draw   = (self._state.sat_phase == "draw"
+                         and row == self._state.draw_row
+                         and col == self._state.draw_col)
+            active  = self._cells.active_satellite
+            is_sat  = (active is not None and (row, col) in active.coordinates)
+
+            if is_draw:
+                if is_sat and is_build:
+                    bg = C_BRIGHT_GREEN
+                elif is_sat:
+                    bg = C_BRIGHT_GREEN if is_handle else C_SAT
+                elif is_handle:
+                    bg = C_GRAY_BLUE
+                elif is_build:
+                    bg = C_DARK_GREEN
+                elif is_refcell:
+                    bg = C_GRAY_BLUE
+                else:
+                    bg = C_DRAW
+                return C_DRAW, bg
+
+            if is_handle:
+                return C_GRAY_BLUE, (C_BRIGHT_GREEN if is_sat else C_GRAY_BLUE)
+            if is_sat and is_build:
+                return C_BRIGHT_GREEN, C_DARK_GREEN
+            if is_sat:
+                return C_SAT, C_SAT
+            if is_refcell:
+                return C_GRAY_BLUE, C_GRAY_BLUE
+            if is_build:
+                return C_DARK_GREEN, C_DARK_GREEN
+            return C_BLACK, C_BLACK
+
+        # B mode / H mode — orange cursor hidden in H mode
+        is_cursor = (self._state.mode != Mode.HISTORY
+                     and row == self._state.cursor_row
+                     and col == self._state.cursor_col)
         if is_cursor:
             if is_refcell:
                 return C_ORANGE, C_GRAY_BLUE
             if is_build:
                 return C_ORANGE, C_DARK_GREEN
             return C_ORANGE, C_ORANGE
-
         if is_refcell:
             return C_GRAY_BLUE, C_GRAY_BLUE
         if is_build:
@@ -119,6 +169,7 @@ class CloudbitsApp(App):
     .w7   { width: 7;   }
     .w9   { width: 9;   }
     .w13  { width: 13;  }
+    #cmd-center-label { width: 1fr; content-align: center middle; }
 
     /* main content */
     #main-content  { height: 33; layout: horizontal; }
@@ -164,6 +215,8 @@ class CloudbitsApp(App):
         self._last_tsv_name: str = ""
         self._tag_eligible: bool = False   # True briefly after K, allows T
         self._tagging: bool = False        # True while KT tag input is open
+        self._sat_exit_pending: bool = False
+        self._sat_illegal: bool = False
 
     # ── layout ───────────────────────────────────────────────────────────────
 
@@ -180,23 +233,9 @@ class CloudbitsApp(App):
                     # Left (35): saVe only, centered above Pattern Library
                     yield Static("sa[cyan]V[/]e", id="cmd-left")
 
-                    # Center (66): commands evenly spaced above grid
+                    # Center (66): mode-sensitive command bar
                     with Horizontal(id="cmd-center"):
-                        yield Static("[cyan]B[/]uild",    classes="w5")
-                        yield Container(classes="w4")
-                        yield Static("[cyan]S[/]atellite", classes="w9")
-                        yield Container(classes="w4")
-                        yield Static("[cyan]F[/]lip",      classes="w4")
-                        yield Container(classes="w4")
-                        yield Static("·",                  classes="w1")
-                        yield Container(classes="w4")
-                        yield Static("·",                  classes="w1")
-                        yield Container(classes="w4")
-                        yield Static("[cyan]  +  [/]",     classes="w5")
-                        yield Container(classes="w5")
-                        yield Static("[cyan]E[/]dit",      classes="w4")
-                        yield Container(classes="w5")
-                        yield Static("[cyan]I[/]nclude",   classes="w7")
+                        yield Static(_CMD_BUILD, id="cmd-center-label")
 
                     # Right (35): Keep History, positions match old box centres
                     with Horizontal(id="cmd-right"):
@@ -296,6 +335,31 @@ class CloudbitsApp(App):
                 self._begin_restore()
             return
 
+        # S mode
+        if self._state.mode == Mode.SATELLITE:
+            if self._sat_exit_pending:
+                if key == "b":
+                    self._do_exit_satellite()
+                else:
+                    self._sat_exit_pending = False
+                    self._update_sat_status()
+            elif key == "b":
+                self._begin_exit_satellite()
+            elif key in ("up", "down", "left", "right"):
+                if self._state.sat_phase == "draw":
+                    self._sat_draw_move(key)
+                else:
+                    self._sat_move_handle(key)
+            elif key == "space":
+                if self._state.sat_phase == "draw":
+                    self._sat_toggle_cell()
+            elif key in ("return", "enter", "ctrl+m"):
+                self._sat_toggle_phase()
+            elif key == "i":
+                if not self._sat_illegal:
+                    self._do_include()
+            return
+
         # KT: if K was just pressed and T follows, begin tagging
         if self._tag_eligible:
             self._tag_eligible = False
@@ -325,6 +389,9 @@ class CloudbitsApp(App):
         elif key == "h":
             if self._history.count > 0:
                 self._enter_history()
+            return
+        elif key == "s":
+            self._enter_satellite()
             return
         else:
             return
@@ -428,7 +495,7 @@ class CloudbitsApp(App):
 
     def _restore_status(self) -> None:
         self._set_status(
-            "BUILD  ·  ARROWS move   SPACE toggle   K to Keep  KT to Keep and Tag"
+            "BUILD  ·  ARROWS move   SPACE toggle   S satellite   K to Keep  KT to tag"
         )
 
     def _set_status(self, msg: str) -> None:
@@ -454,7 +521,7 @@ class CloudbitsApp(App):
         self._last_tsv_name = self._session.write_tsv(
             GRID_MAX, self._cells.build_cells, coeff
         )
-        self._tag_eligible = True
+        self._tag_eligible = (self._state.mode == Mode.BUILD)
         self._set_status(f"Kept: {self._last_tsv_name}  ·  T to tag")
 
     # ── H mode (history slideshow) ────────────────────────────────────────────
@@ -524,10 +591,156 @@ class CloudbitsApp(App):
         self._sync_validation()
         self.query_one(GridWidget).refresh()
 
+    # ── S mode (Satellite) ───────────────────────────────────────────────────
+
+    def _enter_satellite(self) -> None:
+        sat = SatelliteSet()
+        self._cells.satellite_sets = [sat]
+        self._cells._active_idx = 0
+        self._state.handle_row = self._state.cursor_row
+        self._state.handle_col = self._state.cursor_col
+        self._state.draw_row   = self._state.cursor_row
+        self._state.draw_col   = self._state.cursor_col
+        self._state.sat_phase  = "draw"
+        self._state.mode       = Mode.SATELLITE
+        self._sat_illegal      = False
+        self._update_cmd_center()
+        self._update_sat_status()
+        self._sync_rowcol()
+        self.query_one(GridWidget).refresh()
+
+    def _begin_exit_satellite(self) -> None:
+        active = self._cells.active_satellite
+        if active and active.coordinates:
+            self._sat_exit_pending = True
+            self._set_status(
+                "SATELLITE set non-empty  ·  B again to exit and discard   other key to stay"
+            )
+        else:
+            self._do_exit_satellite()
+
+    def _do_exit_satellite(self) -> None:
+        self._sat_exit_pending = False
+        self._state.cursor_row = self._state.handle_row
+        self._state.cursor_col = self._state.handle_col
+        self._cells.satellite_sets = []
+        self._cells._active_idx   = -1
+        self._state.mode          = Mode.BUILD
+        self._sat_illegal         = False
+        self._update_cmd_center()
+        self._sync_rowcol()
+        self._restore_status()
+        self.query_one(GridWidget).refresh()
+
+    def _sat_draw_move(self, key: str) -> None:
+        dr, dc = _SAT_DIRS[key]
+        new_r = self._state.draw_row + dr
+        new_c = self._state.draw_col + dc
+        if GRID_MIN <= new_r <= GRID_MAX and GRID_MIN <= new_c <= GRID_MAX:
+            self._state.draw_row = new_r
+            self._state.draw_col = new_c
+        self._sync_rowcol()
+        self.query_one(GridWidget).refresh()
+
+    def _sat_toggle_cell(self) -> None:
+        r, c   = self._state.draw_row, self._state.draw_col
+        active = self._cells.active_satellite
+        if active is None:
+            return
+        if (r, c) in active.coordinates:
+            active.coordinates.discard((r, c))
+        else:
+            active.coordinates.add((r, c))
+        self._check_sat_legality()
+        self.query_one(GridWidget).refresh()
+
+    def _sat_move_handle(self, key: str) -> None:
+        dr, dc     = _SAT_DIRS[key]
+        active     = self._cells.active_satellite
+        sat_coords = active.coordinates if active else set()
+        new_hr = self._state.handle_row + dr
+        new_hc = self._state.handle_col + dc
+        if not (GRID_MIN <= new_hr <= GRID_MAX and GRID_MIN <= new_hc <= GRID_MAX):
+            return
+        for r, c in sat_coords:
+            if not (GRID_MIN <= r + dr <= GRID_MAX and GRID_MIN <= c + dc <= GRID_MAX):
+                return
+        self._state.handle_row = new_hr
+        self._state.handle_col = new_hc
+        if active:
+            active.coordinates = {(r + dr, c + dc) for r, c in sat_coords}
+        self._check_sat_legality()
+        self._sync_rowcol()
+        self.query_one(GridWidget).refresh()
+
+    def _sat_toggle_phase(self) -> None:
+        if self._state.sat_phase == "draw":
+            self._state.sat_phase = "move"
+        else:
+            self._state.sat_phase  = "draw"
+            self._state.draw_row   = self._state.handle_row
+            self._state.draw_col   = self._state.handle_col
+        self._update_sat_status()
+        self._sync_rowcol()
+        self.query_one(GridWidget).refresh()
+
+    def _check_sat_legality(self) -> None:
+        active = self._cells.active_satellite
+        if not active:
+            self._sat_illegal = False
+            return
+        build = self._cells.build_cells
+        for r, c in active.coordinates:
+            for dr, dc in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+                if (r + dr, c + dc) in build:
+                    self._sat_illegal = True
+                    return
+        self._sat_illegal = False
+
+    def _do_include(self) -> None:
+        active = self._cells.active_satellite
+        if active is None or self._sat_illegal:
+            return
+        for r, c in active.coordinates:
+            self._cells.build_cells.add((r, c))
+        self._do_keep()
+        self._tag_eligible = False
+        self.query_one("#cmd-center-label", Static).update(_CMD_SAT_FLASH)
+        self.set_timer(0.4, self._restore_cmd_center)
+        self._set_status(f"SATELLITE  ·  Included → {self._last_tsv_name}")
+        self._check_sat_legality()
+        self._sync_validation()
+        self.query_one(GridWidget).refresh()
+
+    def _update_cmd_center(self) -> None:
+        text = _CMD_SAT if self._state.mode == Mode.SATELLITE else _CMD_BUILD
+        self.query_one("#cmd-center-label", Static).update(text)
+
+    def _restore_cmd_center(self) -> None:
+        if self._state.mode == Mode.SATELLITE:
+            self.query_one("#cmd-center-label", Static).update(_CMD_SAT)
+
+    def _update_sat_status(self) -> None:
+        if self._state.sat_phase == "draw":
+            self._set_status(
+                "SATELLITE DRAW  ·  ARROWS move cursor   SPACE toggle"
+                "   Return → Move   I include"
+            )
+        else:
+            self._set_status(
+                "SATELLITE MOVE  ·  ARROWS move set   Return → Draw   I include"
+            )
+
     # ── UI sync ───────────────────────────────────────────────────────────────
 
     def _sync_rowcol(self) -> None:
-        r, c = self._cursor.position
+        if self._state.mode == Mode.SATELLITE:
+            if self._state.sat_phase == "draw":
+                r, c = self._state.draw_row, self._state.draw_col
+            else:
+                r, c = self._state.handle_row, self._state.handle_col
+        else:
+            r, c = self._cursor.position
         self.query_one("#ctrl-rowcol", Static).update(
             self._box(f"Row  Col\n{r:4d} {c:4d}", "", 13)
         )
