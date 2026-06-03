@@ -1,0 +1,48 @@
+
+The six things to discuss:
+
+  1. Handle position authority — AppState currently has cursor_row/cursor_col 
+for the orange cursor. 
+In S mode the Handle is the navigator. The Handle position also lives 
+inside SatelliteSet. Which is authoritative? 
+
+Should AppState grow handle_row/handle_col fields, or should the rendering layer 
+read the Handle directly from active_satellite.handle_row? 
+This affects how CursorController is extended. 
+
+2. CursorController in S mode — Moving the Handle moves the entire satellite 
+set as a group (all coordinates shift by the same delta). 
+Does CursorController.move() grow awareness of the current mode and do the 
+right thing, or does a separate method handle group translation? 
+
+3. New CellSetManager methods needed — 
+- spawn_satellite() (creates set with Handle at cursor position), 
+- toggle_satellite_cell() (relative to handle? absolute?), 
+- include() (copies active satellite coords into build_cells). 
+
+The signatures need to be worked out. 
+
+4. Validation switching: 
+— Currently ValidationEngine.validate() is always passed build_cells. 
+  In S mode it should get the active satellite's coordinates instead. 
+- That means CbitsCanvas._sync_validation() needs to know the mode 
+  and pass the right set. 
+
+5. Include auto-K sequencing: 
+— Include triggers an automatic K before stamping. The current K flow 
+snapshots whatever is in build_cells at the moment. 
+If include() modifies build_cells and then K is called, the snapshot 
+captures the wrong state. 
+
+The order needs to be explicit: snapshot first, then stamp. 
+
+6. B-from-S warning — The spec requires a warning if any Satellite has 
+cells before removing them all. That confirmation flow lives in the Textual 
+layer but the check lives in CellSetManager. 
+
+How does that handshake work? A simple has_satellite_cells() predicate, 
+then Textual handles the confirm/cancel?
+
+The rendering additions (Handle chexels, bright green satellite cells, 
+margin color) are straightforward once the logic questions above are 
+settled.

@@ -1,0 +1,11 @@
+
+  Where .ptn files are written:
+  ~/.cloudbits/patterns/ (i.e. /home/nnumerics/.cloudbits/patterns/ in WSL). This is
+  set in FileManager.__init__ as the default when no library_dir is passed, and
+  CbitsCanvas instantiates FileManager() with no argument.
+
+  Pattern Library browser:
+  FileManager.list_patterns() exists and reads from that same ~/.cloudbits/patterns/
+  directory — but it isn't wired to any UI panel yet in the app. No browser panel has
+  been built, so the "saves but doesn't appear" issue is that the UI component
+  simply doesn't exist yet.
